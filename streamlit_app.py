@@ -1,4 +1,4 @@
-import streamlit as st import pandas as pd import plotly.express as px from fpdf import FPDF from io import BytesIO
+import streamlit as st import pandas as pd import plotly.express as px from fpdf import FPDF from io import BytesIO import matplotlib.pyplot as plt import matplotlib.dates as mdates from tempfile import NamedTemporaryFile
 
 Sayfa Yapılandırması
 
@@ -47,99 +47,61 @@ selected_row = df[df['datetime'].dt.date == selected_date]
 
 if not selected_row.empty: row = selected_row.iloc[0] st.markdown(f""" - Kategori: {row['hki_kategori']} - Renk: {row['hki_renk']} - Açıklama: {row['hki_aciklama']} - Belirleyici Kirletici: {row['hki_kaynak']} """) else: st.warning("Seçilen tarihte veri bulunamadı.")
 
+Döneme göre filtreleme
+
+if period == "Günlük": period_df = df[df['datetime'].dt.date == selected_date] elif period == "Aylık": period_df = df[(df['month'] == selected_month) & (df['year'] == selected_year)] elif period == "Yıllık": period_df = df[df['year'] == selected_year] else: period_df = df.copy()
+
 Grafik - Hava Kalitesi
 
-df_filtered = df[(df['datetime'].dt.month == selected_month) & (df['datetime'].dt.year == selected_year)] fig = px.line(df_filtered, x='datetime', y=['pm10', 'so2', 'no2', 'o3'], labels={'value': 'Konsantrasyon (µg/m³)', 'datetime': 'Tarih'}, title="Aylık Hava Kalitesi Trendleri") fig.update_layout(legend_title_text='Kirletici Türü') st.plotly_chart(fig, use_container_width=True)
+fig = px.line( period_df, x='datetime', y=['pm10', 'so2', 'no2', 'o3'], labels={'value': 'Konsantrasyon (µg/m³)', 'datetime': 'Tarih'}, title=f"{period} Hava Kalitesi Trendleri" ) fig.update_layout(legend_title_text='Kirletici Türü') st.plotly_chart(fig, use_container_width=True)
 
 PDF Raporu Oluşturma Fonksiyonu
 
-def generate_pdf(row): pdf = FPDF() pdf.add_page() pdf.add_font('DejaVu', '', 'DejaVuSans.ttf', uni=True) pdf.add_font('DejaVu', 'B', 'DejaVuSans-Bold.ttf', uni=True) pdf.set_font('DejaVu', 'B', 16) pdf.cell(0, 10, 'Bandırma Hava Kalitesi Raporu', ln=True, align='C') pdf.ln(10) pdf.set_font('DejaVu', '', 12) pdf.multi_cell(0, 10, f""" Tarih: {row['datetime'].date()} HKİ: {row['hki']} Kategori: {row['hki_kategori']} Renk: {row['hki_renk']} Açıklama: {row['hki_aciklama']} Belirleyici Kirletici: {row['hki_kaynak']} """) return pdf.output(dest='S').encode('latin-1')
+def generate_pdf(row, best_row, worst_row, plot_path): pdf = FPDF() pdf.add_page() pdf.add_font('DejaVu', '', 'DejaVuSans.ttf', uni=True) pdf.add_font('DejaVu', 'B', 'DejaVuSans-Bold.ttf', uni=True) pdf.set_font('DejaVu', 'B', 16) pdf.cell(0, 10, 'Bandırma Hava Kalitesi Raporu', ln=True, align='C') pdf.ln(10) pdf.set_font('DejaVu', '', 12) pdf.multi_cell(0, 10, f""" Tarih: {row['datetime'].date()} HKİ: {row['hki']} Kategori: {row['hki_kategori']} Renk: {row['hki_renk']} Açıklama: {row['hki_aciklama']} Belirleyici Kirletici: {row['hki_kaynak']}
 
-if generate and not selected_row.empty: pdf_content = generate_pdf(row) st.download_button(label="PDF Raporunu 🔥 İndir", data=BytesIO(pdf_content), file_name="hava_kalitesi_raporu.pdf", mime="application/pdf")
+En İyi HKİ (Seçilen Dönem): {best_row['hki']} - {best_row['datetime']}
+En Kötü HKİ (Seçilen Dönem): {worst_row['hki']} - {worst_row['datetime']}
+""")
+pdf.image(plot_path, x=10, y=None, w=180)
+return pdf.output(dest='S').encode('latin-1')
+
+Matplotlib ile grafik oluşturup geçici olarak kaydet
+
+best_row, worst_row = None, None if not period_df.empty: best_row = period_df.loc[period_df['hki'].idxmin()] worst_row = period_df.loc[period_df['hki'].idxmax()]
+
+fig2, ax = plt.subplots(figsize=(10, 4))
+ax.plot(period_df['datetime'], period_df['hki'], label='HKİ', color='tab:blue')
+ax.set_title(f"{period} HKİ Değişimi")
+ax.set_xlabel("Tarih")
+ax.set_ylabel("HKİ")
+ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
+ax.tick_params(axis='x', rotation=45)
+ax.grid(True)
+plt.tight_layout()
+
+with NamedTemporaryFile(delete=False, suffix=".png") as tmpfile:
+    plt.savefig(tmpfile.name)
+    image_path = tmpfile.name
+
+if generate and not selected_row.empty:
+    pdf_content = generate_pdf(row, best_row, worst_row, image_path)
+    st.download_button(label="📄 PDF Raporunu İndir", data=BytesIO(pdf_content), file_name="hava_kalitesi_raporu.pdf", mime="application/pdf")
 
 Sorgular
 
-st.header("🔍 Seçilen Zamanlara Göre HKİ Sorguları")
+st.header(f"📈 {period} İçin En İyi ve En Kötü HKİ Analizi")
 
-1. Seçilen gün ve saat
+if not period_df.empty: st.subheader("✅ En İyi HKİ Verisi") st.markdown(f""" - Tarih/Saat: {best_row['datetime']} - HKİ: {best_row['hki']} - Kategori: {best_row['hki_kategori']} - Renk: {best_row['hki_renk']} - Kirletici: {best_row['hki_kaynak']} - Açıklama: {best_row['hki_aciklama']} """)
 
-st.subheader("1️⃣ Seçilen Gün ve Saat Bilgisi") if not selected_row.empty: row = selected_row.iloc[0] st.write(f"🕒 Saat: {row['datetime'].hour}:00") st.markdown(f""" - HKİ Değeri: {row['hki']} - Kategori: {row['hki_kategori']} - Renk: {row['hki_renk']} - Belirleyici Kirletici: {row['hki_kaynak']} - Açıklama: {row['hki_aciklama']} """) else: st.warning("Seçilen saatlik veriye ulaşılamadı.")
-
-2. Yıllık analiz
-
-year_df = df[df['year'] == selected_year] if not year_df.empty: st.subheader("2️⃣ Seçilen Yıl İçin HKİ Özeti") best_year_row = year_df.loc[year_df['hki'].idxmin()] worst_year_row = year_df.loc[year_df['hki'].idxmax()]
-
-st.markdown("**2.a En İyi Gün (Yıl İçinde)**")
+st.subheader("❌ En Kötü HKİ Verisi")
 st.markdown(f"""
-- **Tarih:** {best_year_row['datetime']}
-- **HKİ:** {best_year_row['hki']}
-- **Kategori:** {best_year_row['hki_kategori']}
-- **Renk:** {best_year_row['hki_renk']}
-- **Kirletici:** {best_year_row['hki_kaynak']}
-- **Açıklama:** {best_year_row['hki_aciklama']}
+- **Tarih/Saat:** {worst_row['datetime']}
+- **HKİ:** {worst_row['hki']}
+- **Kategori:** {worst_row['hki_kategori']}
+- **Renk:** {worst_row['hki_renk']}
+- **Kirletici:** {worst_row['hki_kaynak']}
+- **Açıklama:** {worst_row['hki_aciklama']}
 """)
 
-st.markdown("**2.b En Kötü Gün (Yıl İçinde)**")
-st.markdown(f"""
-- **Tarih:** {worst_year_row['datetime']}
-- **HKİ:** {worst_year_row['hki']}
-- **Kategori:** {worst_year_row['hki_kategori']}
-- **Renk:** {worst_year_row['hki_renk']}
-- **Kirletici:** {worst_year_row['hki_kaynak']}
-- **Açıklama:** {worst_year_row['hki_aciklama']}
-""")
-
-else: st.warning("Seçilen yıl için veri bulunamadı.")
-
-3. Aylık analiz
-
-month_df = df[(df['month'] == selected_month) & (df['year'] == selected_year)] if not month_df.empty: st.subheader("3️⃣ Seçilen Ay İçin HKİ Özeti") best_month_row = month_df.loc[month_df['hki'].idxmin()] worst_month_row = month_df.loc[month_df['hki'].idxmax()]
-
-st.markdown("**3.a En İyi Gün (Ay İçinde)**")
-st.markdown(f"""
-- **Tarih:** {best_month_row['datetime']}
-- **HKİ:** {best_month_row['hki']}
-- **Kategori:** {best_month_row['hki_kategori']}
-- **Renk:** {best_month_row['hki_renk']}
-- **Kirletici:** {best_month_row['hki_kaynak']}
-- **Açıklama:** {best_month_row['hki_aciklama']}
-""")
-
-st.markdown("**3.b En Kötü Gün (Ay İçinde)**")
-st.markdown(f"""
-- **Tarih:** {worst_month_row['datetime']}
-- **HKİ:** {worst_month_row['hki']}
-- **Kategori:** {worst_month_row['hki_kategori']}
-- **Renk:** {worst_month_row['hki_renk']}
-- **Kirletici:** {worst_month_row['hki_kaynak']}
-- **Açıklama:** {worst_month_row['hki_aciklama']}
-""")
-
-else: st.warning("Seçilen ay için veri bulunamadı.")
-
-4. Günlük analiz
-
-day_df = df[df['datetime'].dt.date == selected_date] if not day_df.empty: st.subheader("4️⃣ Seçilen Gün İçin HKİ Özeti") best_day_row = day_df.loc[day_df['hki'].idxmin()] worst_day_row = day_df.loc[day_df['hki'].idxmax()]
-
-st.markdown("**4.a Gün İçindeki En İyi Saat**")
-st.markdown(f"""
-- **Saat:** {best_day_row['datetime'].hour}:00
-- **HKİ:** {best_day_row['hki']}
-- **Kategori:** {best_day_row['hki_kategori']}
-- **Renk:** {best_day_row['hki_renk']}
-- **Kirletici:** {best_day_row['hki_kaynak']}
-- **Açıklama:** {best_day_row['hki_aciklama']}
-""")
-
-st.markdown("**4.b Gün İçindeki En Kötü Saat**")
-st.markdown(f"""
-- **Saat:** {worst_day_row['datetime'].hour}:00
-- **HKİ:** {worst_day_row['hki']}
-- **Kategori:** {worst_day_row['hki_kategori']}
-- **Renk:** {worst_day_row['hki_renk']}
-- **Kirletici:** {worst_day_row['hki_kaynak']}
-- **Açıklama:** {worst_day_row['hki_aciklama']}
-""")
-
-else: st.warning("Seçilen gün için saatlik veri bulunamadı.")
+else: st.warning(f"{period} için veri bulunamadı.")
 
